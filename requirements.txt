@@ -12,3 +12,4 @@ ipaddr==2.1.11
 djangorestframework==3.0.4
 netaddr==0.7.13
 openpyxl==2.1.4
+pandas
