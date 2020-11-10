@@ -1,0 +1,493 @@
+from shared.decorators import Singleton
+from suds.client import Client
+from mw1_backend.configs import QPS_WSDL, QPS_SERVER_URL, PYCURL_TIMEOUT
+from dateutil import parser
+from datetime import datetime
+from models import PCRFProfileLog, TopupLog
+from shared.decorators import timeout_handler, xml_error_handler
+from shared.common import convert_ntz_iso
+from .helpers import SessionPlugin, SessionInfo
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+@Singleton
+class PCRFClient(object):
+    """A singleton class that manages all operations on the PCRF server whether they're session-related or
+     profile related operations"""
+
+    def __init__(self):
+        self.client = Client(QPS_WSDL)
+        self.client.set_options(location=QPS_SERVER_URL, timeout=PYCURL_TIMEOUT)
+        self.custom_client = Client(QPS_WSDL, plugins=[SessionPlugin()])
+        self.custom_client.set_options(location=QPS_SERVER_URL, timeout=PYCURL_TIMEOUT)
+
+    def _get_profile(self, subscriber_id, include_expired=True):
+        response = self.client.service.GetSubscriber(networkId=subscriber_id, returnSessions=False,
+                                                     returnBalances=True,
+                                                     includeExpiredData=include_expired,
+                                            excludeReservationsFromCreditTotal=False)
+
+        return response
+
+    @staticmethod
+    def _format_credit_element(credit_element, original=False):
+        credit = dict(credit_element)
+        credit['startDate'] = credit['startDate'].isoformat()
+        if original:
+            credit['expirationDate'] = credit['expirationDate'].isoformat()
+        return credit
+
+    def _get_balance(self, subscriber_id, include_expired=False):
+        return self.client.service.QueryBalance(networkId=subscriber_id, includeExpiredData=include_expired)
+
+    def _get_parsed_balance(self, subscriber_id, include_expired=False, free_quota=False):
+        balance_response = self._get_balance(subscriber_id, include_expired)
+        if balance_response.errorCode == 15:
+            return {'action_result': False,
+                    'action_error_message': "subscriber does not exist", "not_exist": True}
+        elif bool(balance_response.errorCode):
+            return {'action_result': False,
+                    'action_error_message': 'Error while getting balance, %s' % balance_response.errorMessage}
+
+        if not hasattr(balance_response, 'balance'):
+            return {'action_result': False, 'connection_error': False, 'balance_error': True,
+                    'action_error_message': "subscriber does not exist", "not_exist": True}
+        # Change for Gaming package to be replacement for free quota on NST
+        data_quota = []
+        for parsed_balance in balance_response.balance:
+            data_quota += filter(lambda quota: quota.code == ('DATA4' if free_quota else "DATA"), parsed_balance.quota)
+            if parsed_balance.quota[0].code == "DATA":
+                balance = parsed_balance
+
+#        balance = balance_response.balance[-1]
+#        if balance_response.balance[0].quota[0].code == "DATA":
+#            balance = balance_response.balance[0]
+
+#        data_quota = filter(lambda quota: quota.code == ('DATA2' if free_quota else "DATA"), balance.quota)
+        if not data_quota:
+            if free_quota:
+                logger.warn("Subscriber %s has no free quota", subscriber_id)
+                return {'action_result': True, 'connection_error': False, 'balance_error': False,
+                        'action_error_message': "", "free_quota_error": True}
+
+            return {'action_result': False, 'connection_error': False, 'balance_error': True,
+                    'action_error_message': "subscriber %s has no DATA quota" % subscriber_id}
+
+        data_quota = data_quota[0]
+        profile_balance = {
+            'accountBalanceCode': balance.code,
+            'balanceTotal': data_quota.totals.balance,
+            'debitedTotal': data_quota.totals.debited
+        }
+
+        if hasattr(data_quota, 'credit'):
+            credit_elements = {'original_service': None, 'topups': []}
+            total_amount = 0
+            for credit_element in data_quota.credit:
+                total_amount += credit_element.initialAmount
+                if hasattr(credit_element, 'expirationDate'):
+                    credit_elements['original_service'] = self._format_credit_element(credit_element, original=True)
+                else:
+                    credit_elements['topups'].append(self._format_credit_element(credit_element))
+
+            credit_elements['total_original'] = total_amount
+            return {'balance': profile_balance, 'credit_elements': credit_elements, 'action_result': True,
+                    'action_error_message': None}
+        else:
+            credit_elements = None
+            return {'balance': profile_balance, 'credit_elements': credit_elements, 'action_result': True,
+                    'action_error_message': None}
+
+    def _execute_provision(self, subscriber_id, service_name, start_date, end_date):
+        credential = self.client.factory.create('ns0:CredentialType')
+        credential.networkId = subscriber_id
+        service = self.client.factory.create('ns0:ServiceType')
+        service.code = service_name
+        service.enabled = True
+        create_balance = self.client.factory.create('ns0:CreateBalanceType')
+        create_balance.code = service_name
+        create_balance.quotaCode = 'DATA'
+        create_balance.startDate = start_date
+        create_balance.expirationDate = end_date
+        create_balance.lastRecurringRefresh = start_date
+        avp = self.client.factory.create('ns0:AvpType')
+        avp.code = "SERVICE_NAME"
+        avp.value = service_name
+        subscriber = self.client.factory.create('ns0:SubscriberType')
+        subscriber.createBalance = create_balance
+        subscriber.service = service
+        subscriber.credential = credential
+        subscriber.avp = avp
+        return self.client.service.CreateSubscriber(subscriber=subscriber)
+
+    @staticmethod
+    def _reformat_datetime_string(datetime_str):
+        dt = parser.parse(datetime_str)
+        new_format = dt.strftime("%Y-%m-%d %H:%M:%S")
+        return new_format
+
+    def _log_user_profile(self, user_name, pcrf_balance):
+        """ stores user's profile before deletion """
+        credit_elements = pcrf_balance.get('credit_elements')
+        try:
+            start_date = self._reformat_datetime_string(credit_elements['original_service']['startDate'])
+            end_date = self._reformat_datetime_string(credit_elements['original_service']['expirationDate'])
+        except TypeError:
+            logger.error("Error while parsing start date and/or end date .. using current time value")
+            start_date = datetime.now()
+            end_date = datetime.now()
+
+        pcrf_log = PCRFProfileLog.objects.create(username=user_name,
+                                                 service_name=pcrf_balance['balance']['accountBalanceCode'],
+                                                 start_date=start_date,
+                                                 end_date=end_date,
+                                                 total_debited=float(pcrf_balance['balance']['debitedTotal']),
+                                                 total_amount=float(credit_elements['total_original']),
+                                                 original_amount=float(
+                                                     credit_elements['original_service']['initialAmount']),
+                                                 amount=float(credit_elements['original_service']['amount']))
+
+        topups = pcrf_balance['credit_elements']['topups']
+        for topup in topups:
+            TopupLog.objects.create(credit_id=topup['id'],
+                                    start_date=self._reformat_datetime_string(topup['startDate']),
+                                    basic_amount=topup['initialAmount'], remaining=topup['amount'],
+                                    pcrf_profile=pcrf_log)
+
+    def change_qps_service(self, subscriber_id, old_service, service_name, start_date, end_date):
+        service = self.client.factory.create('ns0:ServiceType')
+        service.code = service_name
+        service.enabled = True
+        balance = self.client.factory.create('ns0:CreateBalanceType')
+        balance.code = service_name
+        balance.quotaCode = 'DATA'
+        balance.startDate = start_date
+        balance.expirationDate = end_date
+        balance.lastRecurringRefresh = start_date
+        return self.client.service.SwitchService(networkId=subscriber_id, oldServiceCode=old_service, service=service,
+                                                 balance=balance)
+
+    def _debit_subscriber(self, subscriber_id, service_name, amount):
+        return self.client.service.Debit(networkId=subscriber_id, balanceCode=service_name, quotaCode="DATA",
+                                         amount=amount)
+
+    def _credit_subscriber(self, subscriber_id, service_name, amount):
+        return self.client.service.Credit(networkId=subscriber_id, balanceCode=service_name, quotaCode="DATA",
+                                          amount=amount)
+
+    def _delete_balance(self, subscriber_id, balance_name):
+        return self.client.service.DeleteBalance(networkId=subscriber_id, code=balance_name)
+
+    @xml_error_handler
+    @timeout_handler
+    def provision_subscriber(self, subscriber_id, service_name, start_date, end_date, reset_consumed=True,
+                             carry_over=0):
+
+        profile_response = self._get_profile(subscriber_id)
+        if not hasattr(profile_response, 'subscriber'):
+            # that means subscriber doesn't exist
+
+            logger.debug("Subscriber %s doesn't exist .. provisioning", subscriber_id)
+            provision_result = self._execute_provision(subscriber_id, service_name, start_date, end_date)
+            if provision_result.errorCode:
+                logger.error('Error happened while provisioning subscriber %s, %s', subscriber_id,
+                             provision_result.errorMessage)
+                return {'action_result': False,
+                        'action_error_message': 'Error happened while provisioning subscriber, '
+                                                '%s.' % provision_result.errorMessage}
+            logger.info("subscriber %s provisioned successfully", subscriber_id)
+            return {'action_result': True, 'action_error_message': ''}
+
+        subscriber = profile_response.subscriber
+        if not hasattr(subscriber, "balance"):
+            # subscriber has a damaged profile and needs to be deleted then provisioned
+            logger.warning("profile %s exists but no balance ... removing", subscriber_id)
+            remove_result = self._remove_subscriber(subscriber_id)
+            if remove_result.errorCode:
+                logger.error('Error happened while removing damaged profile %s, %s', subscriber_id,
+                             remove_result.errorMessage)
+
+                return {'action_result': False,
+                        'action_error_message': 'Error happened while removing damaged profile, '
+                                                '%s.' % remove_result.errorMessage}
+
+            logger.debug("damaged profile %s remove .. reprovisioning", subscriber_id)
+            provision_result = self._execute_provision(subscriber_id, service_name, start_date, end_date)
+            if provision_result.errorCode:
+                logger.error('Error happened while provisioning subscriber %s, %s', subscriber_id,
+                             provision_result.errorMessage)
+                return {'action_result': False,
+                        'action_error_message': 'Error happened while provisioning subscriber, '
+                                                '%s.' % provision_result.errorMessage}
+            logger.info("subscriber %s provisioned successfully", subscriber_id)
+            return {'action_result': True, 'action_error_message': ''}
+
+        try:
+            old_service = profile_response.subscriber.service[0].code
+            balance_response = self._get_parsed_balance(subscriber_id)
+            if not balance_response.get('credit_elements'):
+                balance_response = self._get_parsed_balance(subscriber_id, include_expired=True)
+
+            if not balance_response['action_result'] and  balance_response.get('balance_error'):
+                logger.error('Error while changing service for subscriber %s, %s', subscriber_id,
+                             balance_response['action_error_message'])
+                return balance_response
+
+            old_debit = None
+            if not reset_consumed:
+                credit_elements = balance_response.get('credit_elements')
+                if credit_elements:
+                    old_debit = int(balance_response['balance']['debitedTotal'])
+
+            if balance_response.get('balance'):
+                self._log_user_profile(subscriber_id, balance_response)
+
+                # Here we change the provision service logic to Delete DATA4 before
+                # switching to another service for Gaming packages
+                logger.info(
+                    "Checking and Deleting DATA4 balance if exist for profile %s before switching to another service",
+                    subscriber_id)
+                balance_response = self._get_balance(subscriber_id)
+
+                for balance in balance_response.balance:
+                    if balance.quota[0].code == "DATA4":
+                        logger.warning(
+                            "Deleting DATA4 balance %s for profile %s ", balance.code, subscriber_id)
+                        delete_data4_response = self._delete_balance(subscriber_id, balance.code)
+                        if delete_data4_response.errorCode != 0:
+                            logger.error("Error happened while deleting balance %s", balance.code)
+                            logger.error("Error message from PCRF : %s", delete_data4_response.errorMessage)
+                        else:
+                            logger.debug("Data4 for profile %s removed", subscriber_id)
+                    # End of change
+
+            change_result = self.change_qps_service(subscriber_id, old_service, service_name, start_date, end_date)
+            if change_result.errorCode:
+                return {'action_result': False,
+                        'action_error_message': 'Error while changing service, %s' % change_result.errorMessage}
+
+            if old_debit:
+                logger.debug("Debiting subscriber %s with %s", subscriber_id, old_service)
+                debit_result = self._debit_subscriber(subscriber_id, service_name, old_debit)
+                if debit_result.errorCode:
+                    logger.error('Error happened while debiting subscriber %s, %s', subscriber_id,
+                                 debit_result.errorMessage)
+                    return {'action_result': False,
+                            'action_error_message': 'Error happened while debiting subscriber, '
+                                                    '%s.' % debit_result.errorMessage}
+            if carry_over:
+                credited_result = self._credit_subscriber(subscriber_id, service_name, int(carry_over))
+                if credited_result.errorCode:
+                    logger.error('Error happened while crediting subscriber %s, %s', subscriber_id,
+                                 credited_result.errorMessage)
+                    return {'action_result': False,
+                            'action_error_message': 'Error happened while crediting subscriber, '
+                                                    '%s.' % credited_result.errorMessage}
+
+            logger.info("Subscriber %s was provisioned successfully", subscriber_id)
+            return {'action_result': True, 'action_error_message': ''}
+
+        except IndexError:
+            logger.warn("Subscriber %s has malformed profile on PCRF.", subscriber_id)
+            return {'action_result': False,
+                    'action_error_message': "Malformed profile on PCRF."}
+
+    @xml_error_handler
+    @timeout_handler
+    def get_services(self, subscriber_id, service_type, start_date=None, end_date=None, free_quota=False):
+        """
+        retrieves user's profile on PCRF server.
+        """
+        balance_response = self._get_parsed_balance(subscriber_id, free_quota=free_quota)
+        if not balance_response['action_result'] or balance_response.get('free_quota_error'):
+            return balance_response
+
+        if service_type == 'basic':
+            logger.info("Retrieved service for subscriber %s, %s", subscriber_id,
+                        balance_response['balance']['accountBalanceCode'])
+            return {
+                'action_result': True,
+                'action_error_message': "",
+                'services': [balance_response['balance']['accountBalanceCode']]
+            }
+
+        elif service_type == 'topup':
+            credit_elements = balance_response.get('credit_elements')
+
+            if credit_elements:
+                services = [{'start_date': topup['startDate'],
+                             'basic_amount': topup['initialAmount'],
+                             'remaining': topup['amount'], 'id': topup['id']} for topup in credit_elements['topups']]
+
+            else:
+                logger.debug("No topups were found for subscriber %s", subscriber_id)
+                services = []
+        else:
+            return {
+                'action_result': False,
+                'action_error_message': "You can only choose between basic and topup",
+            }
+
+        # retrieve previous topups
+        if start_date and end_date:
+            topups = [{'start_date': datetime.strftime(topup.start_date, "%Y-%m-%dT%H:%M:%S.%fZ"),
+                       'basic_amount': topup.basic_amount,
+                       'remaining': topup.remaining, 'credit_id': topup.credit_id}
+                      for topup in TopupLog.objects.filter(start_date__gte=convert_ntz_iso(start_date),
+                                                           start_date__lte=convert_ntz_iso(end_date),
+                                                           pcrf_profile__username=subscriber_id)]
+            services = topups + services
+        logger.info("retrieved topups for subscriber %s, %s", subscriber_id, services)
+        return {
+            'action_result': True,
+            'action_error_message': "",
+            'services': services
+        }
+
+    @timeout_handler
+    @xml_error_handler
+    def credit_subscriber(self, subscriber_id, amount):
+        # get service assigned to user
+        services_response = self.get_services(subscriber_id, 'basic')
+        if not services_response['action_result']:
+            return services_response
+        service_name = services_response['services'][0]
+
+        credit_response = self._credit_subscriber(subscriber_id, service_name, int(amount))
+        if credit_response.errorCode:
+            logger.error('Error happened while crediting subscriber %s, %s', subscriber_id,
+                         credit_response.errorMessage)
+            return {'action_result': False,
+                    'action_error_message': 'Error happened while crediting subscriber, '
+                                            '%s.' % credit_response.errorMessage}
+        logger.info("Subscriber %s was credited successfully with %s", subscriber_id, amount)
+        return {'action_result': True, 'action_error_message': None}
+
+    def _try_get_profile(self, subscriber_id, include_expired=False, free_quota=False):
+        try:
+            balance_response = self._get_parsed_balance(subscriber_id, include_expired, free_quota)
+            if balance_response.get('free_quota_error'):
+                return balance_response
+
+            if not balance_response['action_result']:
+                balance_response['profile'] = {'start_date': None, 'end_date': None}
+                return balance_response
+            profile = {
+                'account_balance_code': balance_response['balance']['accountBalanceCode'],
+                'total_debited': balance_response['balance']['debitedTotal'],
+                'total_remaining': balance_response['balance']['balanceTotal'],
+            }
+            credit_elements = balance_response.get('credit_elements')
+            if credit_elements:
+                try:
+                    profile['start_date'] = credit_elements['original_service']['startDate']
+                    profile['end_date'] = credit_elements['original_service']['expirationDate']
+                    profile['basic_amount'] = credit_elements['original_service']['initialAmount']
+                    profile['basic_remaining'] = credit_elements['original_service']['amount']
+                except TypeError:
+                    logger.warn("Subscriber %s has no current bill cycle", subscriber_id)
+                    profile['start_date'] = None
+                    profile['end_date'] = None
+                    profile['basic_amount'] = None
+                    profile['basic_remaining'] = None
+
+            logger.info("Retrieved profile for subscirber %s, %s", subscriber_id, profile)
+            return {
+                'action_result': True,
+                'action_error_message': None,
+                'profile': profile
+            }
+        except KeyError:
+            logger.error("Subscriber %s has a malformed PCRF profile.", subscriber_id)
+            return {
+                'action_result': False,
+                'action_error_message': "Malformed PCRF Profile or subscriber does not exist"
+            }
+
+    @xml_error_handler
+    @timeout_handler
+    def get_profile(self, subscriber_id, free_quota=False):
+        profile_result = self._try_get_profile(subscriber_id, free_quota=free_quota)
+        if profile_result.get('free_quota_error'):
+            return profile_result
+
+        if profile_result.get('profile') and not profile_result['profile'].get('start_date') \
+                and not profile_result['profile'].get('end_date'):
+            logger.warn("subscriber %s has no current bill cycle .. trying to include expired ...", subscriber_id)
+            profile_result = self._try_get_profile(subscriber_id, include_expired=True, free_quota=free_quota)
+
+        return profile_result
+
+
+    @timeout_handler
+    @xml_error_handler
+    def debit_subscriber(self, subscriber_id, service_name, debit_amount):
+        debit_result = self._debit_subscriber(subscriber_id, service_name, debit_amount)
+        if debit_result.errorCode:
+            logger.error('Error happened while debiting subscriber %s, %s', subscriber_id, debit_result.errorMessage)
+            return {'action_result': False,
+                    'action_error_message': 'Error happened while debiting user, '
+                                            '%s.' % debit_result.errorMessage}
+        logger.info("Subscriber %s was debited successfully with %s", subscriber_id, debit_amount)
+        return {'action_result': True, 'action_error_message': None}
+
+    def _remove_subscriber(self, subscriber_id):
+        return self.client.service.DeleteSubscriber(networkId=subscriber_id, hardDelete=True)
+
+    @xml_error_handler
+    @timeout_handler
+    def remove_subscriber(self, subscriber_id):
+        balance_response = self._get_parsed_balance(subscriber_id)
+        if not balance_response.get('credit_elements'):
+            balance_response = self._get_parsed_balance(subscriber_id, include_expired=True)
+            
+        if not balance_response['action_result'] and balance_response.get('balance_error'):
+
+            # subscriber has a damaged profile
+            remove_result = self._remove_subscriber(subscriber_id)
+            if remove_result.errorCode:
+                logger.error('Error happened while removing damaged profile %s, %s', subscriber_id,
+                             remove_result.errorMessage)
+
+                return {'action_result': False,
+                        'action_error_message': 'Error happened while removing damaged profile, '
+                                                '%s.' % remove_result.errorMessage}
+
+            logger.info("subscriber %s was removed successfully", subscriber_id)
+            return {'action_result': True, 'action_error_message': ""}
+
+        if balance_response.get('balance'):
+            self._log_user_profile(subscriber_id, balance_response)
+        remove_result = self._remove_subscriber(subscriber_id)
+        if remove_result.errorCode:
+            logger.error('Error happened while debiting subscriber %s, %s', subscriber_id, remove_result.errorMessage)
+            return {'action_result': False,
+                    'action_error_message': 'Error happened while debiting subscriber, '
+                                            '%s.' % remove_result.errorMessage}
+        logger.info("subscriber %s was removed successfully", subscriber_id)
+        return {'action_result': True, 'action_error_message': ""}
+
+    @xml_error_handler
+    @timeout_handler
+    def query_session(self, subscriber_id):
+        key_field = self.client.factory.create("ns0:KeyFieldType")
+        key_field.code = 'userId'
+        key_field.value = subscriber_id
+        session_key = self.client.factory.create('ns0:SessionKeyType')
+        session_key.code = 'UserIdKey'
+        session_key.primary = False
+        session_key.keyField = [key_field]
+        session_info = SessionInfo()
+
+        self.custom_client.service.QuerySession(key=session_key)
+        capped = [service for service in session_info.sessions if 'CAP' in service[0]]
+        if capped:
+            latest = max(capped, key=lambda pair: pair[1])[0]
+            logger.info("Sessions found for subscriber %s, %s", subscriber_id, latest)
+            return {'action_result': True, 'action_error_message': None,
+                    'session': latest}
+        else:
+            logger.info("No sessions were found for subscriber %s", subscriber_id)
+            return {'action_result': True, 'action_error_message': None, 'session': ""}

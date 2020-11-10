@@ -1,0 +1,130 @@
+from django.conf import settings
+import logging
+logger = logging.getLogger(__name__)
+
+LDAP_HOST = "ldap://ldap.tedata.net:389"
+#LDAP_USER = "uid=admin,ou=administrators,ou=topologymanagement,o=netscaperoot"
+#LDAP_PASSWORD = "N3Y@rCyEm#!"
+LDAP_USER = "uid=vasuser,ou=admin,o=te data,c=eg"
+LDAP_PASSWORD = "MB9ga53Qx"
+LDAP_TIMEOUT = 1200.0
+QPS_SERVER = "213.158.182.5"
+#QPS_SERVER = "213.158.170.3"
+QPS_PORT = 8080
+LDAP_SLEEP_TIME = 2
+RADIUS_HOST = '10.252.18.101'
+RADIUS_HOST2 = "10.252.18.102"
+RADIUS_HOST3 = "213.158.173.66"
+RADIUS_HOST4 = '213.158.173.67'
+
+RADIUS_DR_SESSION_ENDPOINT = "10.252.18.101"
+RADIUS_PORT = 1813
+RADIUS_PORT2 = 1813
+RADIUS_REDIR_PORT = 1813
+IPTV_HOST = "41.33.233.102"
+IPTV_PORT = 7077
+IPTV_USER = "TEData_Sodic"
+IPTV_PASS = "Sodic@Zayed014"
+PYCURL_TIMEOUT = 3 * 60
+SBR_AUTH_PASS = "cm9vdDpLZWxtZXRFbHNlcg=="
+SUBSCRIBED_PRODUCT_TABLE = "subscribed_product"
+MEMBER_TABLE = "member_identity"
+
+PRODUCT_TABLE_NAME = "product"
+
+WIFI_ADSL_TABLE_NAME = "WifiAdslMapping"
+
+RADIUS_SERVER_1 = "root@213.158.173.66"
+RADIUS_SERVER_2 = "root@213.158.173.67"
+RADIUS_SERVER_3 = "root@213.158.181.36"
+RADIUS_SERVER_4 = "root@213.158.181.37"
+LOG_FILE_PATH = "/log/sbr/%(date)s*.log"
+
+RADIUS_GREP_CMD = """ssh -i /var/www/.ssh/id_rsa %(host)s '( grep -w %(username)s  %(today_file_path)s | grep VAS-LOG  | tail -n 100 |cut -d";" -f2,4,5,6,7,8,9,10,11 )' """
+RAMSIS_GREP_CMD = """ssh -i /var/www/.ssh/id_rsa root@163.121.183.202 '( test -f /var/log/radius/radius.log && grep -w %(username)s /var/log/radius/radius.log | tail -n 100 )' """
+
+RADIUS_PORT2 = 1813
+ANALYTICS_STARTING_MONTH_DIFF = 10
+
+DPI_SERVER = "41.234.66.58"
+DPI_PORT = 8443
+DPI_URL = 'https://%s:%s/ReportingServices/ReportingServices' % (DPI_SERVER, DPI_PORT)
+VALID_OPTION_PACK_ZONES = set(['ABS', 'GZA', 'AUTO', 'RMS'])
+
+
+BASE_QUERY_INDEX = 201334784
+BASE_QUERY_VCI_35 = ".1.3.6.1.4.1.2011.5.14.5.5.1.7.{0}.1.0.35.4294967295.255.4294967295"
+BASE_QUERY_VCI_40 = ".1.3.6.1.4.1.2011.5.14.5.5.1.7.{0}.1.0.40.4294967295.255.4294967295"
+BASE_OID = ".1.3.6.1.4.1.2011.5.14.5.2.1.2.{0}"
+BASE_VPI = ".1.3.6.1.4.1.2011.5.14.5.2.1.3.{0}"
+BASE_VCI = ".1.3.6.1.4.1.2011.5.14.5.2.1.4.{0}"
+BASE_VLAN = ".1.3.6.1.4.1.2011.5.14.5.2.1.8.{0}"
+BASE_INNER_VLAN = ".1.3.6.1.4.1.2011.5.14.5.2.1.25.{0}"
+BASE_ADSL = ".1.3.6.1.4.1.2011.5.14.5.2.1.7.{0}"
+BASE_ACTION = ".1.3.6.1.4.1.2011.5.14.5.2.1.15.{0}"
+BASE_ENABLE = ".1.3.6.1.4.1.2011.5.14.5.2.1.13.{0}"
+BASE_RX = ".1.3.6.1.4.1.2011.5.14.5.2.1.22.{0}"
+BASE_TX = ".1.3.6.1.4.1.2011.5.14.5.2.1.21.{0}"
+
+SNMP_GET_COMMUNITY = "public"
+SNMP_SET_COMMUNITY = "private"
+SNMP_VERSION = 2
+ADSL_FILTER_35 = 7
+ADSL_FILTER_40 = 6
+ADSL_DELETE_VALUE = 6
+ADSL_ADD_VALUE = 4
+ADSL_HUAWEI_ENABLE = 1
+ADSL_HUAWEI_DISABLE = 2
+
+HUAWEI5600T_TELNET_USER = "root"
+HUAWEI5600T_TELNET_PASS = "admin"
+
+HUAWEI5600_TELNET_USER = 'isadmin'
+HUAWEI5600_TELNET_PASS = "ANS#150"
+
+ALCATEL_TELNET_USER = "isadmin"
+ALCATEL_TELNET_PASS = "ANS#150"
+
+JUNIPER_ROUTER_TELNET_USER = "a.yousefdarwish"
+JUNIPER_ROUTER_TELNET_PASS = "erWir2!gru"
+
+ZTE_TELNET_USER = "zte"
+ZTE_TELNET_PASS = 'zte'
+ZTE_ENABLE_PASS = 'zxa10'
+
+HUAWEI_FTTH_TELNET_USER = 'tedata2010'
+HUAWEI_FTTH_TELNET_PASS = 'TeData2010'
+
+ZTE_FTTH_TELNET_USER = "tedata2010"
+ZTE_FTTH_TELNET_PASS = "TeData2010"
+
+ERICSSON_FTTH_TELNET_USER = "admin"
+ERICSSON_FTTH_TELNET_PASS = "nep123"
+
+TELNET_DEBUG_LEVEL = 0
+
+FTTH_SPEEDS_MAPPING = {'108': 70, '115': 15, 'DS-70M': 70, 'DS70M': 70, '70Mbps_15Mbps': 70}
+
+try:
+    from env import *
+except:
+    logger.warn("env file was not found !!")
+
+QPS_NS = "http://broadhop.com/unifiedapi/soap/types"
+QPS_ENVELOPE_NS = "http://schemas.xmlsoap.org/soap/envelope/"
+
+QPS_SERVER_URL = 'http://%s:%s/ua/soap' % (QPS_SERVER, QPS_PORT)
+QPS_WSDL = 'http://%s:%s/ua/wsdl/UnifiedApi.wsdl' % (QPS_SERVER, QPS_PORT)
+QPS_ACTIVE_SESSION_URL = "http://%s:%s/rest/subscribersActionQuery/session-query/userId/" % (QPS_SERVER, QPS_PORT)
+
+RADIUS_SESSION_ENDPOINT = "https://%s:%s/scs/request/" % (RADIUS_HOST, RADIUS_PORT)
+RADIUS_DR_SESSION_ENDPOINT = "https://%s:%s/scs/request/" % (RADIUS_HOST2, RADIUS_PORT2)
+RADIUS_DR2_SESSION_ENDPOINT = "https://%s:%s/scs/request/" % (RADIUS_HOST3, RADIUS_PORT2)
+
+RADIUS_REDIR_SESSION_ENDPOINT = "https://%s:%s/scs/request/" % (RADIUS_HOST4, RADIUS_REDIR_PORT)
+
+IPTV_ENDPOINT = "http://%s:%s/services/billiant/ServiceProviderAPI/v1" % (IPTV_HOST, IPTV_PORT)
+IPTV_NS = "http://www.caleotech.com/2011/02/ServiceProviderAPI"
+IPTV_WSDL = IPTV_ENDPOINT + "?WSDL"
+
+

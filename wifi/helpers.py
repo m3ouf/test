@@ -1,0 +1,370 @@
+import pycurl
+import cStringIO
+import urllib
+import string
+import crypt
+import random
+from django.conf import settings
+from shared.common import exec_xml_request, send_error_mail
+from .xml_templates import SEND_SMS, COA_REQUEST, SBR_SESSION
+import logging
+from xml.dom.minidom import parseString
+from mw1_backend.configs import RADIUS_SESSION_ENDPOINT, RADIUS_DR_SESSION_ENDPOINT, RADIUS_DR2_SESSION_ENDPOINT
+from rest_framework.renderers import JSONRenderer
+from .models import MacTal, WiFiLogs
+import json
+import traceback
+
+logger = logging.getLogger(__name__)
+
+
+class CustomJSONRenderer(JSONRenderer):
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        request = renderer_context.get('request', False)
+        current_response = renderer_context.get('response', False)
+        current_view = renderer_context.get('view', False)
+        if request and request.method not in current_view.allowed_methods:
+            response = {
+                'errorCode': 1001,
+                'errorMessage': 'Invalid request method',
+                'successStatus': False
+            }
+            current_response.status_code = 405
+            return super(CustomJSONRenderer, self).render(response, accepted_media_type, renderer_context)
+
+        response = {
+            'errorCode': 0,
+            'errorMessage': '',
+            'successStatus': True
+        }
+        if not data:
+            return super(CustomJSONRenderer, self).render(response, accepted_media_type, renderer_context)
+
+        if isinstance(data, dict):
+            if len(data) == 1 and 'detail' in data:
+                response['errorMessage'] = data['detail']
+                if data['detail'] == 'Authentication key not provided.':
+                    response['errorCode'] = 2001
+                elif data['detail'] == 'Authentication key not valid.':
+                    response['errorCode'] = 2002
+                elif data['detail'] == 'Invalid request method.':
+                    response['errorCode'] = 1001
+                elif data['detail'].endswith('not allowed.'):
+                    response = {
+                        'errorCode': 1001,
+                        'errorMessage': "Invalid request method",
+                        'successStatus': False
+                    }
+            elif 'successStatus' in data and data.get('successStatus', True) == False:
+                if data.get('errorCode', False) in [3001, 3002, 4010, 4011, 4012, 4013, 4020, 4021, 4030, 4031, 4040, 4041, 4050, 4051]:
+                    response = {
+                        'errorCode': data.get('errorCode', False),
+                        'errorMessage': data.get('errorMessage', False),
+                        'successStatus': False
+                    }
+        return super(CustomJSONRenderer, self).render(response, accepted_media_type, renderer_context)
+
+
+def convert_arabic_numerals(number):
+    try:
+        table = {70105: 57, 6160: 48, 6161: 49, 6162: 50, 6163: 51, 6164: 52, 6165: 53, 6166: 54, 6167: 55, 6168: 56, 6169: 57, 120824: 50, 120809: 55, 48: 48, 49: 49, 50: 50, 51: 51, 52: 52, 53: 53, 54: 54, 55: 55, 56: 56, 57: 57, 120808: 54, 4160: 48, 4161: 49, 4162: 50, 4163: 51, 7236: 52, 4165: 53, 4166: 54, 4167: 55, 4168: 56, 4169: 57, 7248: 48, 7249: 49, 7250: 50, 7251: 51, 7252: 52, 7253: 53, 7254: 54, 7255: 55, 7256: 56, 7257: 57, 3430: 48, 3174: 48, 3175: 49, 3176: 50, 3177: 51, 3178: 52, 3179: 53, 3180: 54, 3181: 55, 3182: 56, 3183: 57, 3432: 50, 120822: 48, 2409: 51, 69737: 51, 3434: 52, 2411: 53, 2412: 54, 3437: 55, 4240: 48, 4241: 49, 4242: 50, 4243: 51, 4244: 52, 4245: 53, 4246: 54, 4247: 55, 4248: 56, 4249: 57, 3439: 57, 120795: 51, 66720: 48, 6609: 49, 66722: 50, 66723: 51, 66724: 52, 66725: 53, 66726: 54, 66727: 55, 66728: 56, 66729: 57, 69736: 50, 120815: 51, 43216: 48, 43217: 49, 43218: 50, 43219: 51, 43220: 52, 43221: 53, 43222: 54, 43223: 55, 43224: 56, 43225: 57, 3302: 48, 3303: 49, 3304: 50, 3305: 51, 3306: 52, 3307: 53, 3308: 54, 3309: 55, 3310: 56, 3311: 57, 69872: 48, 69873: 49, 69874: 50, 69875: 51, 69876: 52, 69877: 53, 69878: 54, 69879: 55, 69880: 56, 69881: 57, 43264: 48, 43265: 49, 43266: 50, 43267: 51, 43268: 52, 43269: 53, 43270: 54, 43271: 55, 43272: 56, 43273: 57, 70098: 50, 69739: 53, 69742: 56, 69740: 54, 69942: 48, 69943: 49, 69944: 50, 69945: 51, 69946: 52, 69947: 53, 69948: 54, 69949: 55, 69950: 56, 69951: 57, 6470: 48, 6471: 49, 6472: 50, 6473: 51, 6474: 52, 6475: 53, 6476: 54, 6477: 55, 6478: 56, 6479: 57, 120820: 56, 70100: 52, 2406: 48, 3431: 49, 2408: 50, 3433: 51, 2410: 52, 3435: 53, 3436: 54, 2413: 55, 3438: 56, 2415: 57, 3047: 49, 120821: 57, 7232: 48, 7233: 49, 7234: 50, 7235: 51, 4164: 52, 7237: 53, 7238: 54, 7239: 55, 7240: 56, 7241: 57, 1780: 52, 43472: 48, 43473: 49, 6610: 50, 43475: 51, 43476: 52, 43477: 53, 43478: 54, 43479: 55, 43480: 56, 43481: 57, 43600: 48, 2534: 48, 2535: 49, 2536: 50, 2537: 51, 2538: 52, 2539: 53, 2540: 54, 2541: 55, 2542: 56, 2543: 57, 43603: 51, 43604: 52, 3669: 53, 43606: 54, 43607: 55, 43608: 56, 43609: 57, 42528: 48, 42529: 49, 42530: 50, 42531: 51, 42532: 52, 42533: 53, 42534: 54, 42535: 55, 42536: 56, 42537: 57, 120825: 51, 120828: 54, 3664: 48, 3665: 49, 3666: 50, 3667: 51, 3668: 52, 43605: 53, 3670: 54, 3671: 55, 3672: 56, 3673: 57, 1637: 53, 1632: 48, 1633: 49, 1634: 50, 1635: 51, 1636: 52, 2662: 48, 1638: 54, 1639: 55, 1640: 56, 1641: 57, 2666: 52, 2663: 49, 2668: 54, 2669: 55, 2670: 56, 2671: 57, 2664: 50, 65299: 51, 2665: 51, 70103: 55, 69738: 52, 6784: 48, 6785: 49, 6786: 50, 2667: 53, 6788: 52, 6789: 53, 6790: 54, 6791: 55, 6792: 56, 6793: 57, 65303: 55, 69741: 55, 6800: 48, 6801: 49, 6802: 50, 6803: 51, 6804: 52, 6805: 53, 6806: 54, 6807: 55, 6808: 56, 6809: 57, 69743: 57, 70104: 56, 120819: 55, 69734: 48, 71360: 48, 71361: 49, 71362: 50, 71363: 51, 71364: 52, 71365: 53, 71366: 54, 71367: 55, 71368: 56, 71369: 57, 3792: 48, 3793: 49, 3794: 50, 3795: 51, 3796: 52, 3797: 53, 3798: 54, 3799: 55, 3800: 56, 3801: 57, 6608: 48, 2790: 48, 2791: 49, 2792: 50, 2793: 51, 2794: 52, 2795: 53, 2796: 54, 2797: 55, 2798: 56, 2799: 57, 1776: 48, 1777: 49, 1778: 50, 1779: 51, 43602: 50, 1781: 53, 1782: 54, 1783: 55, 1784: 56, 1785: 57, 6613: 53, 6614: 54, 66721: 49, 6615: 55, 65296: 48, 6616: 56, 65298: 50, 6787: 51, 65300: 52, 65301: 53, 65302: 54, 6617: 57, 65304: 56, 65305: 57, 120810: 56, 3872: 48, 3873: 49, 3874: 50, 3875: 51, 3876: 52, 3877: 53, 3878: 54, 3879: 55, 3880: 56, 3881: 57, 70096: 48, 2414: 56, 120800: 56, 120801: 57, 69735: 49, 120802: 48, 70099: 51, 6992: 48, 6993: 49, 6994: 50, 6995: 51, 6996: 52, 6997: 53, 6998: 54, 6999: 55, 7000: 56, 7001: 57, 120803: 49, 120806: 52, 3046: 48, 2918: 48, 2919: 49, 2920: 50, 2921: 51, 2922: 52, 2923: 53, 2924: 54, 2925: 55, 2926: 56, 2927: 57, 6120: 56, 3049: 51, 120804: 50, 120811: 57, 120812: 48, 70101: 53, 6611: 51, 120813: 49, 120814: 50, 120805: 51, 70097: 49, 120816: 52, 120817: 53, 70102: 54, 120807: 53, 6612: 52, 120818: 54, 7088: 48, 7089: 49, 7090: 50, 7091: 51, 7092: 52, 7093: 53, 7094: 54, 7095: 55, 7096: 56, 7097: 57, 2407: 49, 43601: 49, 1984: 48, 1985: 49, 1986: 50, 1987: 51, 1988: 52, 1989: 53, 1990: 54, 1991: 55, 1992: 56, 1993: 57, 120823: 49, 120782: 48, 120783: 49, 120784: 50, 120785: 51, 120786: 52, 120787: 53, 120788: 54, 120789: 55, 120790: 56, 120791: 57, 120792: 48, 120793: 49, 120794: 50, 43474: 50, 120796: 52, 120797: 53, 120798: 54, 120799: 55, 6112: 48, 6113: 49, 6114: 50, 6115: 51, 6116: 52, 6117: 53, 6118: 54, 6119: 55, 3048: 50, 6121: 57, 3050: 52, 3051: 53, 3052: 54, 3053: 55, 3054: 56, 3055: 57, 44016: 48, 44017: 49, 44018: 50, 44019: 51, 44020: 52, 44021: 53, 44022: 54, 44023: 55, 44024: 56, 44025: 57, 120826: 52, 120827: 53, 65297: 49, 120829: 55, 120830: 56, 120831: 57}
+        return number.translate(table)
+    except:
+        send_error_mail("Failed to convert arabic number (%s) to an english one. \n %s" % (number, traceback.format_exc()), "[WiFi] [ArabicToEnglishConversionFailure] MW Backend Error")
+        return number
+
+def make_http_request(url, params=None, method='GET', type='http'):
+    params = params or {}
+    buf = cStringIO.StringIO()
+    curl = pycurl.Curl()
+    if type == 'xml':
+        headers = ["Content-Type: text/xml"]
+        curl.setopt(curl.HTTPHEADER, headers)
+        curl.setopt(curl.URL, url)
+        curl.setopt(curl.POSTFIELDS, params)
+    else:
+        data = urllib.urlencode(params)
+        if method == 'GET':
+            if params:
+                curl.setopt(curl.URL, url + "?" + data)
+            else:
+                curl.setopt(curl.URL, str(url))
+        elif method == 'POST':
+            curl.setopt(curl.URL, url)
+            curl.setopt(curl.POSTFIELDS, data)
+        else:
+            return {
+                'success': False,
+                'error_message': "Unsupported HTTP method [%s]" % method
+            }
+    curl.setopt(pycurl.SSL_VERIFYPEER, 0)
+    curl.setopt(pycurl.SSL_VERIFYHOST, 0)
+
+    curl.setopt(pycurl.VERBOSE, settings.DEBUG)
+    curl.setopt(pycurl.FOLLOWLOCATION, 1)
+    curl.setopt(curl.WRITEFUNCTION, buf.write)
+
+    try:
+        curl.perform()
+    except pycurl.error, e:
+        send_error_mail("Failed to make HTTP request using CURL on URL: %s \n %s" % (url, traceback.format_exc()), "[WiFi] [MakingHTTPRequestFailure] MW Backend Error")
+        buf.close()
+        return {
+            'error': True,
+            'error_message': "Failed to connect to server on (%s), (%s)" % (url, e.args[1])
+        }
+    status_code = curl.getinfo(pycurl.HTTP_CODE)
+    if status_code == 403:
+        return {
+            'error': True,
+            'error_message': 'Http 403 received .. check proxy settings.'
+        }
+    if status_code == 503:
+        return {
+            'error': True,
+            'error_message': '503 Connection Error'
+        }
+    if status_code == 500:
+        return {
+            'error': True,
+            'error_message': 'internal server error'
+        }
+    response = buf.getvalue()
+    buf.close()
+    return {
+        'error': False,
+        'remote_response': response
+    }
+
+
+def send_sms_request(mobile_number, activation_code):
+    message = "Welcome to TE WiFi .. Your activation code is: %s" % convert_arabic_numerals(activation_code)
+    xml = SEND_SMS % (str(mobile_number), str(message))
+    response = make_http_request('http://10.15.91.107/SendSMS/SendSMS.asmx', xml, method='POST', type='xml')
+    try:
+        xml_results = response.get('remote_response', False)
+        if not xml_results:
+            return False
+        remote_response = parseString(xml_results)
+        result = remote_response.getElementsByTagName('SendSMSRequestResult')
+        if len(result) >= 1:
+            sms_status = result[0].firstChild.data
+            if int(sms_status):
+                logger.info("Sent SMS message to (%s), (%s). Response (%s)", mobile_number, message, response)
+                return True
+            logger.info("Tried to send SMS message to (%s), (%s). Response (%s) but failed!", mobile_number, message, response)
+            return False
+        return False
+    except:
+        logger.info("Tried to send SMS message to (%s), (%s). Response (%s) but failed!", mobile_number, message, response)
+        send_error_mail("Tried to send SMS message to (%s), (%s). Response (%s) but failed!\n %s" % (mobile_number, message, response, traceback.format_exc()), "[WiFi] [SendingSMSFailure] MW Backend Error")
+        return False
+
+
+def wifiConnect(ip_address, mobile):
+    logger.info("Sending COA Request to SBR using IP: %s and Mobile Number: %s" % (ip_address, mobile))
+    sbr_coa_wifi = COA_REQUEST % (ip_address, mobile)
+    try:
+        logger.info("Sending COA Request to SBR using IP: %s and Mobile Number: %s" % (ip_address, mobile))
+        coa_req = exec_xml_request(RADIUS_DR_SESSION_ENDPOINT, sbr_coa_wifi)
+        return True
+    except:
+        logger.info("Sending COA Request to SBR using IP: %s and Mobile Number: %s" % (ip_address, mobile))
+        coa_req = exec_xml_request(RADIUS_DR2_SESSION_ENDPOINT, sbr_coa_wifi)
+        send_error_mail("Failed to send COA request to %s, trying to send to %s .\n %s" % (RADIUS_DR_SESSION_ENDPOINT, RADIUS_DR2_SESSION_ENDPOINT, traceback.format_exc()), "[WiFi] [SendingCOAFailure] MW Backend Error")
+        logger.warning(
+            "An error happened while sending COA to SBR that was not supposed to happen, using IP: %s and Mobile Number: %s, but subscriber won't be able to access internet!" % (ip_address, mobile))
+        return True
+
+
+def _parse_aaa_session_attributes(session_dom, attr='mac'):
+    client_message = session_dom.getElementsByTagName("clientResponse")
+    result_message = client_message[0].getAttribute('resultMessage')
+    if result_message == 'no session found':
+        return False
+    if attr == 'mac':
+        mac = None
+        attributes = session_dom.getElementsByTagName("attribute")
+        for attribute in attributes:
+            if attribute.getAttribute("name") == "Calling-Station-Id":
+                mac = attribute.getAttribute("value")
+        return mac
+    if attr == 'session':
+        session = None
+        attributes = session_dom.getElementsByTagName("attribute")
+        for attribute in attributes:
+            if attribute.getAttribute("name") == "User-Name":
+                user_name = attribute.getAttribute("value")
+        if user_name and user_name == 'NULL':
+            return user_name
+        return True
+
+
+def get_subscriber_mac_address(ip_address):
+    logger.info("Getting subscriber MAC address using IP: %s" % ip_address)
+    try:
+        sbr_session_ip = SBR_SESSION % ip_address
+        session_info = exec_xml_request(RADIUS_DR_SESSION_ENDPOINT, sbr_session_ip)
+        session_dom = parseString(session_info.get('remote_response'))
+        logger.info("Trying to get subscriber session from Main SBR using IP: %s" % ip_address)
+        mac = _parse_aaa_session_attributes(session_dom)
+        if not mac:
+            logger.error("coa debug Failed to get subscriber session from Main SBR, Trying to get subscriber session from DR SBR using IP: %s" % ip_address)
+            session_info = exec_xml_request(RADIUS_SESSION_ENDPOINT, sbr_session_ip)
+            session_dom = parseString(session_info.get('remote_response'))
+            mac = _parse_aaa_session_attributes(session_dom)
+            if not mac:
+                logger.error("coa debug2 Failed to get subscriber session from Main and DR SBR")
+                return False
+        logger.info("Got MAC address from SBR Session..")
+        return mac
+    except:
+        logger.error("coa debug 3 Error while getting subscriber MAC with IP (%s) .." % ip_address)
+        send_error_mail("Error while getting subscriber MAC with IP (%s)..\n %s" % (ip_address, traceback.format_exc()), "[WiFi] [GettingMACAddressFailure] MW Backend Error")
+        return False
+
+
+def get_subscriber_session(ip_address):
+    logger.info("Getting subscriber MAC address using IP: %s" % ip_address)
+    try:
+        sbr_session_ip = SBR_SESSION % ip_address
+        session_info = exec_xml_request(RADIUS_DR_SESSION_ENDPOINT, sbr_session_ip)
+        session_dom = parseString(session_info.get('remote_response'))
+        logger.info("Trying to get subscriber session from Main SBR using IP: %s" % ip_address)
+        session = _parse_aaa_session_attributes(session_dom, 'session')
+        if not session:
+            logger.info("Failed to get subscriber session from Main SBR, Trying to get subscriber session from DR SBR using IP: %s" % ip_address)
+            session_info = exec_xml_request(RADIUS_SESSION_ENDPOINT, sbr_session_ip)
+            session_dom = parseString(session_info.get('remote_response'))
+            session = _parse_aaa_session_attributes(session_dom)
+            if not session:
+                logger.info("Failed to get subscriber session from Main and DR SBR")
+                return False
+        logger.info("Got MAC address from SBR Session..")
+        return session
+    except:
+        logger.error("Error while getting subscriber session with IP (%s) .." % ip_address)
+        send_error_mail("Error while getting subscriber session with IP (%s)..\n %s" % (ip_address, traceback.format_exc()), "[WiFi] [GettingSessionFailure] MW Backend Error")
+        return False
+
+
+def crypt_password(user_password):
+    char_set = string.ascii_uppercase + string.digits
+    salt = ''.join(random.sample(char_set, 8))
+    salt = '$1$' + salt + '$'
+    pwd = "{CRYPT}" + crypt.crypt(str(user_password), salt)
+    return pwd
+
+
+def check_user_type(user_type):
+    logger.info("Setting service for user type: %s" % user_type)
+    if user_type.upper() == 'GUEST':
+        service_name = 'WIFI_GUEST_CAP'
+    elif user_type.upper() == 'ADSL':
+        service_name = 'WIFI_TE_SERVICE_CAP'
+    else:
+        service_name = False
+    return service_name
+
+
+def add_new_subscriber_device(ip, user_type, mobile_no):
+    logger.info("Trying to add a new subscriber device with IP: %s, Mobile Number: %s" % (ip, mobile_no))
+    log_wifi_action(mobile_no, "AddSubscriberDevice", "Trying to add a new Subscriber Device.", None)
+    mac_address = get_subscriber_mac_address(ip)
+    if not mac_address:
+        log_wifi_action(mobile_no, "AddSubscriberDevice", "Couldn't add subscriber device, Couldn't get Subscriber MAC Address.", False)
+        response = {
+            'errorCode': 4030,
+            'errorMessage': "Adding a new device failed",
+            'successStatus': False
+        }
+        return response
+
+    # mactal = MacTal.objects.using('mactal').filter(mac=mac_address)
+    # if mactal:
+    #     logger.info("Trying to add a new subscriber device but found it already exists..HAPPY SCENARIO!")
+    #     log_wifi_action(mobile_no, "Adding a New Subscriber Device: Subscriber device already exists")
+    #     # response = {
+    #     #     'errorCode': 4031,
+    #     #     'errorMessage': "Device already exists.",
+    #     #     'successStatus': False
+    #     # }
+    #     response = {
+    #         'errorCode': 0,
+    #         'errorMessage': "",
+    #         'successStatus': True
+    #     }
+    #     return response
+    service_name = check_user_type(user_type)
+    if not service_name:
+        response = {
+            'errorCode': 4020,
+            'errorMessage': "Registration Failed",
+            'successStatus': False
+        }
+        return response
+    try:
+        logger.info("Adding a new device to MACTal")
+        mactal = MacTal.objects.using('mactal').create(mac=mac_address, msisdn="%s@wifi.tedata.net.eg" % mobile_no, service=service_name)
+        if not mactal:
+            logger.info("Adding a new device to MACTal failed with MAC: (%s) to subscriber (%s)!" % (mac_address, "%s@wifi.tedata.net.eg" % mobile_no))
+            log_wifi_action(mobile_no, "AddSubscriberDevice", "Couldn't add subscriber's device, Database Failure", False)
+            send_error_mail("Adding a new device to MACTal failed with MAC: (%s) to subscriber (%s)!" % (mac_address, "%s@wifi.tedata.net.eg" % mobile_no), "[WiFi] [AddingNewDeviceFailure] MW Backend Error")
+            response = {
+                'errorCode': 4030,
+                'errorMessage': "Adding a new device failed",
+                'successStatus': False
+            }
+            return response
+        logger.info("Adding a new device to MACTal succeeded!")
+        log_wifi_action(mobile_no, "AddSubscriberDevice", "New subscriber device added successfully.", True)
+        response = {
+            'errorCode': 0,
+            'errorMessage': "",
+            'successStatus': True
+        }
+        return response
+    except:
+        logger.info("Adding a new device to MACTal failed with MAC: (%s) to subscriber (%s)!" % (mac_address, "%s@wifi.tedata.net.eg" % mobile_no))
+        log_wifi_action(mobile_no, "AddSubscriberDevice", "Adding a New Subscriber Device: Couldn't add subscriber's device", False)
+        send_error_mail("Adding a new device to MACTal failed with MAC: (%s) to subscriber (%s)! \n %s" % (mac_address, "%s@wifi.tedata.net.eg" % mobile_no, traceback.format_exc()), "[WiFi] [AddingNewDeviceFailure] MW Backend Error")
+        response = {
+            'errorCode': 0,
+            'errorMessage': "",
+            'successStatus': True
+        }
+        return response
+
+def check_mactal_exits(ip):
+    try:
+        logger.info("Checking if MacTal exists with IP: %s" % ip)
+        mac_address = get_subscriber_mac_address(ip)
+        mactal = MacTal.objects.using('mactal').filter(mac=mac_address)
+        if not mactal:
+            return False
+        return True
+    except:
+        send_error_mail("Checking if MAC Address Exists in MACTal Failed with subscriber IP (%s)! \n %s" % (ip, traceback.format_exc()), "[WiFi] [CheckingMACTalFailure] MW Backend Error")
+        return True
+
+
+def log_wifi_action(subscriber_id, fn_name, message, status, payload={}):
+    try:
+        logging_dict = payload.copy()
+        logging_dict.pop('key')
+        logging_dict = dict(logging_dict)
+        final_dict = {}
+        for key, value in logging_dict.items():
+            final_dict[str(key)] = convert_arabic_numerals(value)
+    except (AttributeError, KeyError):
+        final_dict = ""
+
+    try:
+        wifi_log = WiFiLogs.objects.using('wifi_db').create(subscriber_id=subscriber_id, fn_name=fn_name, message=message, status=status, payload=json.dumps(final_dict))
+        if not wifi_log:
+            logger.error("Couldn't log WiFi actions in database!")
+    except:
+        send_error_mail("Error while performing WiFi logging using Subscriber ID (%s)! \n"
+                        "Traceback: %s"
+                        "Payload: \n %s" % (subscriber_id, traceback.format_exc(), payload), "[WiFi] [LoggingFailure] MW Backend Error")
+        logger.error("Couldn't log WiFi actions in database! An Exception occurred.")

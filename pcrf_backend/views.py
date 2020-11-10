@@ -1,0 +1,255 @@
+import json
+
+from django.views.decorators.http import require_http_methods
+from pcrf_backend.forms import DebitForm
+from shared.decorators import check_params, handle_connection_error
+from shared.common import log_action
+from django.http import HttpResponse
+from client import PCRFClient
+from forms import CreateOrChangeForm, ServiceForm, InputForm, DebitForm, CreditForm
+import logging
+import inspect
+
+logger = logging.getLogger(__name__)
+
+
+@require_http_methods(["POST"])
+@check_params('userName', 'serviceName', 'startDate', 'endDate', 'resetConsumed', 'transactionId')
+@handle_connection_error
+def create_or_change_service(request):
+    logger.debug("Creating or changing service (%s) for user (%s), transaction id: (%s)",
+                 request.POST['serviceName'].encode('utf-8').strip(), request.POST['userName'].encode('utf-8').strip(),
+                 request.POST['transactionId'].encode('utf-8').strip())
+    form = CreateOrChangeForm(request.POST)
+    if not form.is_valid():
+        error_msg = ""
+        for k, v in form.errors.items():
+            error_msg += "%s: %s\n" % (k, ", ".join(v))
+        return HttpResponse(json.dumps({'success': False, 'msg': error_msg}), content_type="application/json")
+    pcrf_client = PCRFClient()
+    result = pcrf_client.provision_subscriber(subscriber_id=form.cleaned_data['userName'],
+                                              service_name=form.cleaned_data['serviceName'],
+                                              start_date=form.cleaned_data['startDate'],
+                                              end_date=form.cleaned_data['endDate'],
+                                              reset_consumed=form.cleaned_data['resetConsumed'],
+                                              carry_over=form.cleaned_data.get('carryOver'))
+
+    response = {
+        'success': result['action_result'],
+        'msg': result.get('action_error_message')
+    }
+
+    log_action(inspect.stack()[0][3], request, response,
+               transaction_id=request.POST['transactionId'])
+    return HttpResponse(json.dumps(response), content_type="application/json")
+
+
+@require_http_methods(["GET"])
+@check_params('userName', 'serviceType', 'transactionId')
+@handle_connection_error
+def get_services(request):
+    logger.debug("Getting (%s) services for user (%s), transaction id: (%s)",
+                 request.GET['serviceType'].encode('utf-8').strip(), request.GET['userName'].encode('utf-8').strip(),
+                 request.GET['transactionId'].encode('utf-8').strip())
+    form = ServiceForm(request.GET)
+    if not form.is_valid():
+        error_msg = ""
+        for k, v in form.errors.items():
+            error_msg += "%s: %s\n" % (k, ", ".join(v))
+        return HttpResponse(json.dumps({'success': False, 'msg': error_msg}), content_type="application/json")
+    pcrf_client = PCRFClient()
+    result = pcrf_client.get_services(subscriber_id=form.cleaned_data['userName'],
+                                      service_type=form.cleaned_data['serviceType'],
+                                      start_date=form.cleaned_data.get('startDate'),
+                                      end_date=form.cleaned_data.get('endDate'))
+
+    response = {
+        'success': result['action_result'],
+        'msg': result.get('action_error_message'),
+        'services': result.get('services')
+    }
+    log_action(inspect.stack()[0][3], request, response, transaction_id=request.GET['transactionId'])
+    return HttpResponse(json.dumps(response), content_type="application/json")
+
+
+@require_http_methods(["POST"])
+@check_params('userName', 'creditAmount', 'transactionId')
+@handle_connection_error
+def add_topup(request):
+    form = CreditForm(request.POST)
+    if not form.is_valid():
+        error_msg = ""
+        for k, v in form.errors.items():
+            error_msg += "%s: %s\n" % (k, ", ".join(v))
+        return HttpResponse(json.dumps({'success': False, 'msg': error_msg}), content_type="application/json")
+    subscriber_id = form.cleaned_data['userName']
+    transaction_id = form.cleaned_data['transactionId']
+    credit_amount = form.cleaned_data['creditAmount']
+
+    logger.debug("Adding topup for user (%s), with credit amount (%s), transaction id: (%s)", subscriber_id,
+                 credit_amount,
+                 transaction_id)
+    pcrf_client = PCRFClient()
+
+    result = pcrf_client.credit_subscriber(subscriber_id, credit_amount)
+
+    response = {
+        'success': result['action_result'],
+        'msg': result.get('action_error_message')
+    }
+    log_action(inspect.stack()[0][3], request, response, transaction_id=transaction_id)
+    return HttpResponse(json.dumps(response), content_type="application/json")
+
+
+@require_http_methods(["GET"])
+@check_params('userName', 'transactionId')
+@handle_connection_error
+def get_profile(request):
+    form = InputForm(request.GET)
+    if not form.is_valid():
+        error_msg = ""
+        for k, v in form.errors.items():
+            error_msg += "%s: %s\n" % (k, ", ".join(v))
+        return HttpResponse(json.dumps({'success': False, 'msg': error_msg}), content_type="application/json")
+
+    subscriber_id = form.cleaned_data['userName']
+    transaction_id = form.cleaned_data['transactionId']
+    free_quota = form.cleaned_data['freeQuota']
+
+    pcrf_client = PCRFClient()
+    profile_result = pcrf_client.get_profile(subscriber_id=subscriber_id, free_quota=free_quota)
+    logger.debug("Getting profile for user (%s), transaction id: (%s)", subscriber_id, transaction_id)
+    if not profile_result['action_result']:
+        response = {
+            'success': True if profile_result.get('action_error_message').endswith("does not exist")
+            else profile_result['action_result'],
+            'msg': profile_result.get('action_error_message'),
+        }
+        if 'not_exist' in profile_result:
+            response['not_exist'] = profile_result['not_exist']
+        log_action(inspect.stack()[0][3], request, response, transaction_id=transaction_id)
+        return HttpResponse(json.dumps(response), content_type="application/json")
+
+    topups_result = pcrf_client.get_services(subscriber_id, service_type='topup', free_quota=free_quota)
+
+    response = {
+        'success': True if topups_result.get('action_error_message', '').endswith("does not exist") else
+        topups_result['action_result'],
+        'msg': topups_result.get('action_error_message'),
+        'profile': profile_result.get('profile'),
+        'topups': topups_result.get('services')
+    }
+
+    log_action(inspect.stack()[0][3], request, response, transaction_id=transaction_id)
+    return HttpResponse(json.dumps(response), content_type="application/json")
+
+
+@require_http_methods(["GET"])
+@check_params('userName', 'transactionId')
+@handle_connection_error
+def get_session(request):
+    form = InputForm(request.GET)
+    if not form.is_valid():
+        error_msg = ""
+        for k, v in form.errors.items():
+            error_msg += "%s: %s\n" % (k, ", ".join(v))
+        return HttpResponse(json.dumps({'success': False, 'msg': error_msg}), content_type="application/json")
+
+    subscriber_id = form.cleaned_data['userName']
+    transaction_id = form.cleaned_data['transactionId']
+    logger.debug("Getting session for user (%s), transaction id: (%s)", subscriber_id, transaction_id)
+
+    pcrf_client = PCRFClient()
+    result = pcrf_client.query_session(subscriber_id=subscriber_id)
+
+    response = {
+        'success': result['action_result'],
+        'msg': result.get('action_error_message'),
+        'session': result.get('session')
+    }
+
+    log_action(inspect.stack()[0][3], request, response, transaction_id=transaction_id)
+    return HttpResponse(json.dumps(response), content_type="application/json")
+
+
+@require_http_methods(["POST"])
+@check_params('userName', 'serviceName', 'debitAmount', 'transactionId')
+@handle_connection_error
+def debit_user(request):
+    form = DebitForm(request.POST)
+    if not form.is_valid():
+        error_msg = ""
+        for k, v in form.errors.items():
+            error_msg += "%s: %s\n" % (k, ", ".join(v))
+        return HttpResponse(json.dumps({'success': False, 'msg': error_msg}), content_type="application/json")
+
+    subscriber_id = form.cleaned_data['userName']
+    service_name = form.cleaned_data['serviceName']
+    debit_amount = int(form.cleaned_data['debitAmount'])
+    transaction_id = form.cleaned_data['transactionId']
+
+    logger.debug("Debiting user (%s), for service (%s), with amount (%s), transaction id: (%s)",
+                 subscriber_id, service_name, debit_amount, transaction_id)
+    pcrf_client = PCRFClient()
+    result = pcrf_client.debit_subscriber(subscriber_id, service_name, debit_amount)
+    response = {
+        'success': result['action_result'],
+        'msg': result.get('action_error_message'),
+    }
+
+    log_action(inspect.stack()[0][3], request, response, transaction_id=transaction_id)
+    return HttpResponse(json.dumps(response), content_type="application/json")
+
+
+@require_http_methods(["POST"])
+@check_params('userName', 'transactionId')
+@handle_connection_error
+def remove_user(request):
+    subscriber_id = request.POST['userName'].encode('utf-8').strip()
+    transaction_id = request.POST['transactionId'].encode('utf-8').strip()
+    logger.debug("Removing user (%s), transaction id: ", subscriber_id, transaction_id)
+    pcrf_client = PCRFClient()
+    result = pcrf_client.remove_subscriber(subscriber_id)
+    response = {
+        'success': result['action_result'],
+        'msg': result.get('action_error_message'),
+    }
+
+    log_action(inspect.stack()[0][3], request, response, transaction_id=transaction_id)
+    return HttpResponse(json.dumps(response), content_type="application/json")
+
+
+@require_http_methods(["POST"])
+@check_params('userName', 'originalService', 'transactionId')
+@handle_connection_error
+def reset_session(request):
+    user_name = request.POST['userName'].encode('utf-8').strip()
+    transaction_id = request.POST['transactionId'].encode('utf-8').strip()
+    logger.debug("Resetting session for user (%s), transaction id: ", user_name, transaction_id)
+
+    response = {
+        'success': True,
+        'msg': "",
+    }
+
+    log_action(inspect.stack()[0][3], request, response, transaction_id=transaction_id)
+    return HttpResponse(json.dumps(response), content_type="application/json")
+
+
+@require_http_methods(["POST"])
+@check_params('ipAddress', 'transactionId')
+@handle_connection_error
+def remove_redirection(request):
+    ipAddress = request.POST['ipAddress'].encode('utf-8').strip()
+    transaction_id = request.POST['transactionId'].encode('utf-8').strip()
+    logger.debug("Updating session for IP (%s), transaction id: ", ipAddress, transaction_id)
+
+    pcrf_client = PCRFClient()
+    result = pcrf_client.update_session(ipAddress)
+    
+    response = {
+        'success': result['action_result'],
+        'msg': result.get('action_error_message'),
+    }
+
+    return HttpResponse(json.dumps(response), content_type="application/json")

@@ -1,0 +1,14 @@
+ipdb==0.8
+ipython==1.1.0
+lxml==3.2.3
+pycurl==7.19.0.2
+django==1.6.7
+South==0.8.4
+python-ldap==2.4.13
+MySQL-python
+python-dateutil
+suds-jurko==0.6
+ipaddr==2.1.11
+djangorestframework==3.0.4
+netaddr==0.7.13
+openpyxl==2.1.4

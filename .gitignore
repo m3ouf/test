@@ -1,0 +1,13 @@
+.project
+.pydevproject
+env/
+*.pyc
+*.swp
+mw1_backend/local_settings.py
+.idea*
+static
+*.orig
+mw1_backend/env.py
+mw1_backend/wsgi.py
+*.csv
+*.xlsx

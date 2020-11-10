@@ -1,0 +1,354 @@
+# Django settings for mw1_backend project.
+import os
+import socket
+
+DEBUG = False
+TEMPLATE_DEBUG = DEBUG
+SITE_ROOT = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
+
+ADMINS = (
+    ('Mohamed Ouf', 'mohamed.m.megahed@tedata.net'),
+)
+
+MANAGERS = ADMINS
+
+
+def _get_local_name():
+    try:
+        return socket.gethostname()
+    except:
+        return ""
+
+
+SERVER_EMAIL = 'network.vas@tedata.net'
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_SUBJECT_PREFIX = '[MW-Backend <{0}>] '.format(_get_local_name())
+
+ALLOWED_HOSTS = ["*"]
+
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': 'sbr_mw',
+        'USER': 'mw1',
+        'PASSWORD': 'MW_PASS',
+        'HOST': '10.252.18.132',
+        'PORT': '',
+	'CONN_MAX_AGE': 0
+    },
+    'sbr': {
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': 'sbr',
+        'USER': 'mw',
+        'PASSWORD': 'mwpa$$',
+        'HOST': '213.158.181.150',
+        'PORT': '',
+	'CONN_MAX_AGE': 0
+    },
+    'sbr_sessions_1': {
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': 'SteelBeltedRadius',
+        'USER': 'extuser',
+        'PASSWORD': '3xtU$er',
+        'HOST': '10.252.18.101',
+        'PORT': '3001',
+	'CONN_MAX_AGE': 0
+    },
+    'sbr_sessions_2': {
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': 'SteelBeltedRadius',
+        'USER': 'extuser',
+        'PASSWORD': '3xtU$er',
+        'HOST': '10.252.18.102',
+        'PORT': '3001',
+	'CONN_MAX_AGE': 0
+    },
+    'unified_db': {
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': 'sbr',
+        'USER': 'nst',
+        'PASSWORD': 'nst$$',
+        'HOST': '213.158.181.150',
+        'PORT': '3306',
+        'CONN_MAX_AGE': 0
+    },
+    'wifi_db': {
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': 'tewifi',
+        'USER': 'wifiuser',
+        'PASSWORD': 'Zx8tDDas',
+        'HOST': '10.252.18.132',
+        'PORT': '3306',
+        'CONN_MAX_AGE': 0
+    },
+    'ip_plans': {
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': 'ip_plans',
+        'USER': 'ipplans',
+        'PASSWORD': 'ippl@ns',
+        'HOST': '10.252.18.132',
+        'PORT': '3306',
+    },
+    'subscriber_logs': {
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': 'sbr_vaslog',
+        'USER': 'sbr_vaslog',
+        'PASSWORD': 'sbr_vaslog$$',
+        'HOST': '10.252.18.133',
+        'PORT': '3306',
+    },
+    'mactal':{
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': 'tewifi',
+        'USER': 'wifiuser',
+        'PASSWORD': 'Zx8tDDas',
+        'HOST': '10.252.18.132',
+        'PORT': '3306',
+    },
+    'physical_adsl': {
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': 'physical_adsl',
+        'USER': 'phyadsl',
+        'PASSWORD': 'phyadsl$$',
+        'HOST': '10.252.18.132',
+        'PORT': '3306',
+        'CONN_MAX_AGE': 0
+    },
+    'auto_wifi_db': {
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': 'auto_wifi_db',
+        'USER': 'autowifidb',
+        'PASSWORD': 'autowifidb$$',
+        'HOST': '10.252.18.132',
+        'PORT': '3306',
+        'CONN_MAX_AGE': 0
+    },
+    'daily_usage_db': {
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': 'sbr_mw',
+        'USER': 'mw1',
+        'PASSWORD': 'MW_PASS',
+        'HOST': '10.252.18.132',
+        'PORT': '',
+	    'CONN_MAX_AGE': 0
+    }
+}
+
+DATETIME_INPUT_FORMATS = (
+    '%Y-%m-%d %H:%M:%S',  # '2006-10-25 14:30:59'
+    '%Y-%m-%d %H:%M:%S.%f',  # '2006-10-25 14:30:59.000200'
+    '%Y-%m-%d %H:%M',  # '2006-10-25 14:30'
+    '%Y-%m-%d',  # '2006-10-25'
+    '%m/%d/%Y %H:%M:%S',  # '10/25/2006 14:30:59'
+    '%m/%d/%Y %H:%M:%S.%f',  # '10/25/2006 14:30:59.000200'
+    '%m/%d/%Y %H:%M',  # '10/25/2006 14:30'
+    '%m/%d/%Y',  # '10/25/2006'
+    '%m/%d/%y %H:%M:%S',  # '10/25/06 14:30:59'
+    '%m/%d/%y %H:%M:%S.%f',  # '10/25/06 14:30:59.000200'
+    '%m/%d/%y %H:%M',  # '10/25/06 14:30'
+    '%m/%d/%y',  # '10/25/06'
+    '%Y-%m-%dT%H:%M:%S',  # 'ISO 8601 format .. does not support timezones.'
+)
+
+# Local time zone for this installation. Choices can be found here:
+# http://en.wikipedia.org/wiki/List_of_tz_zones_by_name
+# although not all choices may be available on all operating systems.
+# In a Windows environment this must be set to your system time zone.
+#TIME_ZONE = 'Africa/Cairo'
+TIME_ZONE = 'Africa/Blantyre'
+
+# Language code for this installation. All choices can be found here:
+# http://www.i18nguy.com/unicode/language-identifiers.html
+LANGUAGE_CODE = 'en-us'
+
+SITE_ID = 1
+
+# If you set this to False, Django will make some optimizations so as not
+# to load the internationalization machinery.
+USE_I18N = True
+
+# If you set this to False, Django will not format dates, numbers and
+# calendars according to the current locale.
+USE_L10N = True
+
+# If you set this to False, Django will not use timezone-aware datetimes.
+USE_TZ = False
+
+# Absolute filesystem path to the directory that will hold user-uploaded files.
+# Example: "/home/media/media.lawrence.com/media/"
+MEDIA_ROOT = os.path.join(SITE_ROOT, 'media')
+
+# URL that handles the media served from MEDIA_ROOT. Make sure to use a
+# trailing slash.
+# Examples: "http://media.lawrence.com/media/", "http://example.com/media/"
+MEDIA_URL = '/media/'
+
+# Absolute path to the directory static files should be collected to.
+# Don't put anything in this directory yourself; store your static files
+# in apps' "static/" subdirectories and in STATICFILES_DIRS.
+# Example: "/home/media/media.lawrence.com/static/"
+STATIC_ROOT = os.path.join(SITE_ROOT, 'static')
+
+# URL prefix for static files.
+# Example: "http://media.lawrence.com/static/"
+STATIC_URL = '/static/'
+#
+# # Additional locations of static files
+# STATICFILES_DIRS = (
+# # Put strings here, like "/home/html/static" or "C:/www/django/static".
+#     # Always use forward slashes, even on Windows.
+#     # Don't forget to use absolute paths, not relative paths.
+#     os.path.join(SITE_ROOT, 'static'),
+# )
+
+# List of finder classes that know how to find static files in
+# various locations.
+STATICFILES_FINDERS = (
+    'django.contrib.staticfiles.finders.FileSystemFinder',
+    'django.contrib.staticfiles.finders.AppDirectoriesFinder',
+    #    'django.contrib.staticfiles.finders.DefaultStorageFinder',
+)
+
+# Make this unique, and don't share it with anybody.
+SECRET_KEY = 'af7570mfyr7h+ndp(zfofu=bak3+7r$dbjoul4xevq@vh8k3t3'
+
+# List of callables that know how to import templates from various sources.
+TEMPLATE_LOADERS = (
+    'django.template.loaders.filesystem.Loader',
+    'django.template.loaders.app_directories.Loader',
+    #     'django.template.loaders.eggs.Loader',
+)
+
+
+#SESSION_ENGINE = "django.contrib.sessions.backends.signed_cookies"
+
+ROOT_URLCONF = 'mw1_backend.urls'
+
+# Python dotted path to the WSGI application used by Django's runserver.
+WSGI_APPLICATION = 'mw1_backend.wsgi.application'
+
+TEMPLATE_DIRS = (
+    # Put strings here, like "/home/html/django_templates" or "C:/www/django/templates".
+    # Always use forward slashes, even on Windows.
+    # Don't forget to use absolute paths, not relative paths.
+)
+
+INSTALLED_APPS = (
+    'django.contrib.auth',
+    'django.contrib.contenttypes',
+    'django.contrib.sessions',
+    'django.contrib.sites',
+    'django.contrib.messages',
+    'django.contrib.staticfiles',
+    'aaa_backend',
+    'shared',
+    'pcrf_backend',
+    'south',
+    'ldap_backend',
+    'iptv_backend',
+    'nst',
+    'auth',
+    'wifi',
+    'database_backend',
+    'rest_framework',
+    'physical_adsl_backend',
+
+    # Uncomment the next line to enable the admin:
+    'django.contrib.admin',
+    # Uncomment the next line to enable admin documentation:
+    # 'django.contrib.admindocs',
+)
+# A sample logging configuration. The only tangible logging
+# performed by this configuration is to send an email to
+# the site admins on every HTTP 500 error when DEBUG=False.
+# See http://docs.djangoproject.com/en/dev/topics/logging for
+# more details on how to customize your logging configuration.
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '%(levelname)s %(asctime)s %(module)s:%(funcName)s:%(lineno)d> %(message)s'
+        },
+        'simple': {
+            'format': '%(levelname)s> %(message)s'
+        },
+    },
+    'filters': {
+        'require_debug_false': {
+            '()': 'django.utils.log.RequireDebugFalse'
+        }
+    },
+    'handlers': {
+        'mail_admins': {
+            'level': 'ERROR',
+            'filters': ['require_debug_false'],
+            'class': 'django.utils.log.AdminEmailHandler'
+        },
+        'mail_admins_critical': {
+            'level': 'CRITICAL',
+            'class': 'django.utils.log.AdminEmailHandler'
+        },
+        'console': {
+            'level': 'DEBUG',
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose'
+        },
+        'logfile': {
+            'level': 'INFO',
+            'class': 'logging.handlers.TimedRotatingFileHandler',
+            'filename': "/var/log/mw/backend.log",
+            'when': 'midnight',
+            'formatter': 'verbose',
+        },
+        'error_mail': {
+            'level': 'ERROR',
+            'class': 'shared.AdminEmail.ErrorNotifier',
+            'formatter': 'verbose',
+            'include_html': False,
+        },
+
+    },
+    'loggers': {
+        '': {
+            'handlers': ['console', 'logfile'],
+            'propagate': True,
+            'level': 'INFO',
+
+        },
+        'admin_logger': {
+            'handlers': ['error_mail', 'logfile', 'console'],
+            'level': 'INFO',
+            'propagate': True,
+        }
+    }
+}
+
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework.authentication.TokenAuthentication',
+    ),
+   'DEFAULT_PERMISSION_CLASSES': (
+        'rest_framework.permissions.AllowAny',
+    ),
+}
+
+DATABASE_ROUTERS = ['database_backend.routers.IpPlansRouter', 'ldap_backend.routers.LDAPServicesRouter',
+                    'physical_adsl_backend.routers.PhysicalAdslRouter']
+
+try:
+    from local_settings import *
+except ImportError:
+    pass
+
+MIDDLEWARE_CLASSES = (
+    'mw1_backend.middlewares.XsSharing',
+    'django.middleware.common.CommonMiddleware',
+    'django.contrib.sessions.middleware.SessionMiddleware',
+    #'django.middleware.csrf.CsrfViewMiddleware',
+    'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'django.contrib.messages.middleware.MessageMiddleware',
+    # Uncomment the next line for simple clickjacking protection:
+    # 'django.middleware.clickjacking.XFrameOptionsMiddleware',
+)
